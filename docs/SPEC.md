@@ -99,9 +99,9 @@ Contracts (names, inputs, outputs):
 | Function | Inputs | Output |
 |---|---|---|
 | `Settings` (config.py) | n=128, n_angles=60, counts=2e5, seed=0, n_iter=100, n_subsets=1, beta=0.0, lesion=False | dataclass |
-| `make_fine_phantom(n, lesion=False)` | coarse image size, optional small lesion (fine-grid disk in a uniform region) | `fine_truth[2n,2n]` in [0, 1] (D7) |
+| `make_fine_phantom(n, lesion=False, lesion_contrast=0.25)` | coarse image size, optional small lesion, optional contrast (default +25%) | `fine_truth[2n,2n]` in [0, 1] (D7, D26) |
 | `block_mean(fine)` | `fine[2n,2n]` | `coarse[n,n]`, 2x2 block mean (D7) |
-| `make_phantom(n, lesion=False)` | image size, optional small lesion | `(block_mean(make_fine_phantom(n, lesion)), mask[n,n])` (D7) |
+| `make_phantom(n, lesion=False, lesion_contrast=0.25)` | image size, optional small lesion, optional contrast | `(block_mean(make_fine_phantom(n, lesion, lesion_contrast)), mask[n,n])` (D7, D26) |
 | `lesion_rois(n)` | image size | `(lesion_roi, background_roi)` boolean masks [n,n]; see D12 |
 | `build_operator(n, thetas_deg, n_det=None)` | image size, angles, detector bins (`None` means `n + 2`) | sparse `A`, shape `(n_angles*n_det, n*n)`; fine operator = `build_operator(2n, thetas, n_det=2*(n+2))` (D5, D6) |
 | `CountingOperator(A)` | sparse A | object with `.forward(x)`, `.back(y)`, `.n_forward`, `.n_back` |
@@ -110,7 +110,7 @@ Contracts (names, inputs, outputs):
 | `mlem(op, m, n_iter, mask, callback=None)` | operator, sinogram | `(x, history)` |
 | `osem(op, m, n_iter, n_subsets, mask, callback=None)` | as above | `(x, history)` |
 | `mlem_tv(op, m, n_iter, beta, mask, callback=None)` | as above | `(x, history)`; TV acts on `x/scale` (D16; see open question O1) |
-| `score(truth, rec_scaled, lesion_roi, background_roi)` | images in [0,1] | dict: psnr, ssim, lesion_contrast, background_noise, contrast_recovery (D9-D11) |
+| `score(truth, rec_scaled, mask, lesion_roi, background_roi)` | images in [0,1], boolean masks | dict: psnr, ssim, lesion_contrast, background_noise, contrast_recovery (D9-D11, D25) |
 | `run_one(settings, methods)` | settings, method names | list of result-row dicts |
 | `save_rows(path, rows)`, `load_rows(path)` | rows | CSV with settings in every row |
 

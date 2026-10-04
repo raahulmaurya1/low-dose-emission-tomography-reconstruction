@@ -79,18 +79,65 @@ thresholds will be recorded as T1, T2, ... when they are measured.
 - **D19. Timing gate.** Before Step 9, time one run at `n=64` and at `n=128` and estimate the
   full grid. If it exceeds ~2 hours, propose a reduction and wait for owner approval.
 
+## Owner decisions (recorded at Step 1, 2026-10-05)
+
+- **D21 (answers O1). Contract change:** `mlem_tv(op, m, n_iter, beta, mask, scale, callback=None)`.
+  TV is evaluated on `u = x / scale`.
+- **D22 (answers O2).** `build_operator(..., n_det=None)` means `n + 2` (guard bins). The fine
+  operator passes `n_det = 2*(n+2)` explicitly.
+- **D23 (answers O3).** No separate 180-degree limited-angle run. Limited-angle ranges are 90, 120
+  and 150 degrees only (30, 40, 50 angles at 3-degree spacing). The full-range 60-angle result
+  from the angles sweep is the reference point in that comparison; it is reused, not rerun.
+  (Supersedes the 180-degree part of D18.)
+- **D24. Step 9 estimate** uses the sparse operator's own measured timings, not the prototype's
+  52 s per 60-angle run.
+- **D25. Contract change:** `score(truth, rec_scaled, mask, lesion_roi, background_roi)`. `score`
+  receives the mask because PSNR and SSIM are mask-only (D9, D10).
+- **D26. Lesion contrast parameterization.** `make_fine_phantom(n, lesion=False, lesion_contrast=0.25)`
+  and `make_phantom(n, lesion=False, lesion_contrast=0.25)`. The lesion contrast is parameterized,
+  defaulting to +25% (+0.05 elevation over 0.20 brain tissue, lesion intensity 0.25).
+- **D27. ROI sizing for stable statistics.** Background ROI radius enlarged to `5n/64` coarse pixels
+  eroded by 1 px, yielding 248 pixels at n=128 (>= 150) and 44 pixels at n=64. Lesion ROI maintains
+  radius `3n/64` (radius 6 at n=128, eroded by 1 px -> 68 pixels at n=128, 12 pixels at n=64).
+- **D28. ROI spacing and edge clearance (Revision 2).** Background ROI moved to lower-left uniform
+  brain tissue: center `(33*n/128, -20*n/128)`, radius `8.5*n/128` coarse pixels eroded by 1 px.
+  This gives 164 pixels at n=128 (>= 150) and 26 pixels at n=64. Measured gap between ROI boundaries
+  is 39.56 px at n=128 (spec requires >= 8 px) and 21.19 px at n=64 (>= 4 px). Minimum distance to
+  any intensity edge in clean truth is 5.00 px for background ROI and 7.21 px for lesion ROI at n=128
+  (spec requires >= 5 px); at n=64 it is 2.83 px and 3.61 px (>= 2.5 px).
+- **D29. Accepted deviation: n=64 background ROI pixel count.** At n=64, the background ROI has
+  26 pixels (< 37 px, the proportional 150/4). Accepted by owner: n=64 is for development only;
+  all final evaluation and reported results use n=128 where the count is 164 px (>= 150).
+
+## Implementation choices (Step 1; made by the engineer, listed for owner review)
+
+- **C1. Lesion and background geometry** (module constants in `phantom.py`). Centers are offsets
+  from the image center (rows, cols):
+  lesion `(4*n/32, 7*n/32)`, radius `3*n/64` (radius 6 at n=128, 68 px after 1 px erosion);
+  background `(33*n/128, -20*n/128)`, radius `8.5*n/128` (164 px after 1 px erosion at n=128).
+  Default lesion intensity `0.25` inside brain tissue of value `0.20` (contrast +25%).
+  Requires `n` to be a multiple of 32 (checked; `ValueError` otherwise).
+- **C2. ROI construction.** Coarse pixels whose four fine sub-pixels all lie in the disk, then one
+  `scipy.ndimage.binary_erosion` (default cross structure, 1 iteration).
+- **C3. Fine phantom** = `resize(shepp_logan_phantom(), (2n, 2n), anti_aliasing=True)` multiplied
+  by the fine inscribed-circle mask, so everything outside the field of view is exactly zero.
+- **C4. `background_noise`** uses the population standard deviation (`ddof=0`).
+- **C5. SSIM** leaves the other skimage defaults unchanged (`use_sample_covariance=True`, `K1=0.01`,
+  `K2=0.03`), as reported by `help()`.
+
 ## Open questions
 
-- **O1. `mlem_tv` signature vs D16.** TV on `x / scale` needs `scale`, but the frozen contract
-  `mlem_tv(op, m, n_iter, beta, mask, callback=None)` has no `scale` argument. Options:
-  (a) add a `scale` argument (contract change), or (b) the caller passes a `beta` already
-  expressed for `x / scale`. Not changed; owner decision needed before Step 7.
-- **O2. `build_operator` default.** D6 does not say what `n_det=None` means. The SPEC table now
-  reads `None` as `n + 2`. Owner confirmation needed before Step 2.
-- **O3. Limited-angle overlap.** Limited-angle range 180 degrees at 3-degree spacing (60 angles) is the
-  same geometry as the full-range 60-angle setting; both will be run as listed unless the owner
-  says otherwise.
+- **O1.** Resolved by D21.
+- **O2.** Resolved by D22.
+- **O3.** Resolved by D23.
 
 ## Measured thresholds
 
-(none yet)
+- **T1. Phantom and ROI uniformity tolerance.** Measured standard deviation of truth inside
+  both ROIs is <= 5.6e-17 at both n=64 and n=128 (floating point zero).
+  The uniformity tolerance in tests is set to `1e-12`, providing a safety margin of ~1e4 above
+  numerical precision.
+- **T2. Block mean downsampling tolerance.** Max absolute difference between block_mean(make_fine_phantom)
+  and coarse phantom truth is 0.0 (measured <= 1e-16). Test tolerance is set to `1e-14`.
+
+
