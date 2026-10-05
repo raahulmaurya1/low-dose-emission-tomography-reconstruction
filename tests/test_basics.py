@@ -5,6 +5,8 @@ import pytest
 from config import Settings
 from phantom import make_fine_phantom, block_mean, make_phantom, lesion_rois
 from metrics import psnr, ssim, lesion_contrast, background_noise, contrast_recovery, score
+from scan import simulate_scan
+from projector import build_operator
 
 
 def test_import_config_defaults():
@@ -212,3 +214,140 @@ def test_score_dict():
     np.testing.assert_allclose(res["lesion_contrast"], 0.25, atol=1e-12)
     np.testing.assert_allclose(res["contrast_recovery"], 1.0, atol=1e-12)
     np.testing.assert_allclose(res["background_noise"], 0.0, atol=1e-12)
+
+
+# ==============================================================================
+# Step 3: scan simulation tests (simulate_scan)
+# ==============================================================================
+
+
+def test_simulate_scan_reproducibility():
+    """(a) Same seed gives identical m; different seeds differ."""
+    n = 64
+    fine = make_fine_phantom(n)
+    thetas = np.linspace(0, 180, 30, endpoint=False)
+    counts = 2e5
+
+    m1, scale1, exp1 = simulate_scan(fine, thetas, counts, seed=42)
+    m2, scale2, exp2 = simulate_scan(fine, thetas, counts, seed=42)
+    m3, scale3, exp3 = simulate_scan(fine, thetas, counts, seed=43)
+
+    np.testing.assert_array_equal(m1, m2)
+    assert scale1 == scale2
+    np.testing.assert_array_equal(exp1, exp2)
+    assert not np.array_equal(m1, m3)
+
+
+def test_simulate_scan_shape_and_values():
+    """(b) m is non-negative, integer-valued, shape (n_angles, n+2), dtype float64."""
+    n = 64
+    fine = make_fine_phantom(n)
+    thetas = np.linspace(0, 180, 30, endpoint=False)
+    counts = 2e5
+
+    m, scale, expected = simulate_scan(fine, thetas, counts, seed=0)
+
+    assert m.shape == (len(thetas), n + 2)
+    assert expected.shape == (len(thetas), n + 2)
+    assert m.dtype == np.float64
+    assert np.all(m >= 0.0)
+    assert np.all(m == np.floor(m))
+    assert scale > 0.0
+    assert np.all(expected >= 0.0)
+
+
+def test_simulate_scan_total_counts():
+    """(c) sum(m) is within 5*sqrt(counts) of the target counts."""
+    n = 64
+    fine = make_fine_phantom(n)
+    thetas = np.linspace(0, 180, 30, endpoint=False)
+    counts = 2e5
+
+    m, _, _ = simulate_scan(fine, thetas, counts, seed=123)
+    total_m = m.sum()
+    std_counts = np.sqrt(counts)
+    diff = abs(total_m - counts)
+
+    assert diff <= 5.0 * std_counts
+
+
+def test_simulate_scan_poisson_statistics():
+    """(d) Poisson check: over bins with scale*expected >= 20, z = (m-mu)/sqrt(mu) has mean ~0 and std ~1."""
+    n = 64
+    fine = make_fine_phantom(n)
+    thetas = np.linspace(0, 180, 30, endpoint=False)
+    counts = 2e5
+    A_fine = build_operator(2 * n, thetas, n_det=2 * (n + 2))
+
+    pooled_z = []
+    for s in range(5):
+        m, scale, expected = simulate_scan(fine, thetas, counts, seed=s, A_fine=A_fine)
+        mu = scale * expected
+        mask = mu >= 20.0
+        z = (m[mask] - mu[mask]) / np.sqrt(mu[mask])
+
+        # Per-seed checks (T8: measured |mean| <= 0.053, std in [0.969, 1.036])
+        assert abs(np.mean(z)) < 0.10
+        assert 0.90 <= np.std(z) <= 1.10
+        pooled_z.extend(z)
+
+    pooled_z = np.array(pooled_z)
+    # Pooled checks (T8: measured pooled mean -0.0055, std 1.0117)
+    assert abs(np.mean(pooled_z)) < 0.05
+    assert abs(np.std(pooled_z) - 1.0) < 0.05
+
+
+def test_simulate_scan_mass_conservation():
+    """(e) Mass: expected.sum() equals n_angles * block_mean(fine_truth).sum() to measured tolerance."""
+    for n in (64, 128):
+        fine = make_fine_phantom(n)
+        coarse = block_mean(fine)
+        thetas = np.linspace(0, 180, 30, endpoint=False)
+        counts = 2e5
+
+        _, _, expected = simulate_scan(fine, thetas, counts, seed=0)
+        expected_mass = len(thetas) * coarse.sum()
+        mass_diff = abs(expected.sum() - expected_mass)
+        # T9: measured diff <= 1.46e-11; threshold 1e-8
+        assert mass_diff < 1e-8
+
+
+def test_simulate_scan_inverse_crime_guard():
+    """(f) Inverse-crime guard: compare expected against coarse operator on coarse truth.
+    Must have BOTH an upper bound and a non-zero lower bound.
+    """
+    for n in (64, 128):
+        fine = make_fine_phantom(n)
+        coarse = block_mean(fine)
+        thetas = np.linspace(0, 180, 30 if n == 64 else 60, endpoint=False)
+        counts = 2e5
+
+        _, _, expected = simulate_scan(fine, thetas, counts, seed=0)
+        A_coarse = build_operator(n, thetas)
+        p_coarse = (A_coarse @ coarse.ravel()).reshape(len(thetas), n + 2)
+
+        rel_l2 = np.linalg.norm(expected - p_coarse) / np.linalg.norm(p_coarse)
+        # T10: measured rel_l2 is 0.0223 at n=64, 0.0181 at n=128.
+        # Upper bound: 0.050; Lower bound: 0.005 (clearly non-zero, guarding against inverse crime).
+        assert 0.005 < rel_l2 < 0.050
+
+
+def test_simulate_scan_a_fine_caching_and_validation():
+    """Verify precomputed A_fine gives identical result and invalid inputs raise ValueError."""
+    n = 32
+    fine = make_fine_phantom(n)
+    thetas = np.array([0.0, 45.0, 90.0])
+    A_fine = build_operator(2 * n, thetas, n_det=2 * (n + 2))
+
+    m_cached, scale_cached, exp_cached = simulate_scan(fine, thetas, 1e4, seed=7, A_fine=A_fine)
+    m_uncached, scale_uncached, exp_uncached = simulate_scan(fine, thetas, 1e4, seed=7, A_fine=None)
+
+    np.testing.assert_array_equal(m_cached, m_uncached)
+    assert scale_cached == scale_uncached
+    np.testing.assert_allclose(exp_cached, exp_uncached, atol=1e-12)
+
+    # Invalid input validation
+    with pytest.raises(ValueError):
+        simulate_scan(np.ones((10, 11)), thetas, 1e4, seed=0)  # non-square
+    with pytest.raises(ValueError):
+        simulate_scan(np.ones((11, 11)), thetas, 1e4, seed=0)  # odd dimension

@@ -149,6 +149,15 @@ thresholds will be recorded as T1, T2, ... when they are measured.
     identity check is the uncommitted, reviewed Step 2 file (SHA-256
     `B1392499FF3132354F70FBCD55CB3D35E54ADE7DF3CAC754EA83A3B2E32814D1`), copied byte-for-byte to the
     agent scratch directory.
+- **D32. `simulate_scan` contract change & inverse-crime limitation (Step 3).**
+  - Contract change: added optional `A_fine=None` parameter:
+    `simulate_scan(fine_truth, thetas_deg, counts, seed, A_fine=None) -> (m, scale, expected)`.
+    When `A_fine` is provided, it bypasses re-building the fine operator `build_operator(2*n, thetas_deg, n_det=2*(n+2))`.
+    The function validates that `fine_truth` is a square 2-D array of even side length ($2n \times 2n$) and that `counts > 0`.
+  - Inverse-crime protection is PARTIAL: the simulation and reconstruction use the same pixel-driven
+    projector family on two different grid resolutions ($2n$ fine vs $n$ coarse). The measured mismatch
+    is $1.8\% - 2.2\%$ relative $L_2$ error. As required by the owner, the README must explicitly state
+    that this multi-scale formulation reduces the inverse crime but does not completely remove the effect.
 
 ## Implementation choices (Step 2; made by the engineer, listed for owner review)
 
@@ -187,14 +196,24 @@ thresholds will be recorded as T1, T2, ... when they are measured.
   `n+2` operator with guard bins dropped, vs `radon(img[::-1, :], theta, circle=True).T` (D30 y-flip):
   measured Pearson r = 0.98552 (without the y-flip: 0.208). Threshold `0.95` (margin 0.035).
   Mutations measured against it: negated angle -> 0.340, x/y swap -> 0.261 (both fail).
-  The residual 1.4% is attributed to radon's rotation centre at index n//2 (vs (n-1)/2 here) and its
-  different interpolation; not investigated further.
+  Scratch check at odd n (n=63: r = 0.999992; n=65: r = 0.999993; n=127: r = 0.999994) confirmed
+  that the ~1.4% gap at even n is a centre-convention effect (skimage centers rotation at index n//2,
+  whereas this project centers at (n-1)/2.0, which coincide only when n is odd). Per owner instruction,
+  threshold 0.95 remains unchanged.
 - **T5. Centered disk angular variation tolerance.** Measured relative variation of projection
   profiles across 30 angles on Cartesian grid is 0.0305 (~3.05%). Test threshold is set to `0.050`.
 - **T6. Centered disk profile symmetry tolerance.** Measured asymmetry error |p(s) - p(-s)| is
   <= 3.55e-14. Test threshold is set to `1e-12`.
 - **T7. Column sum & mass conservation tolerance.** Measured deviation for mask pixels and
   mask-supported images is <= 1.71e-13. Test threshold is set to `1e-12`.
-
-
-
+- **T8. Poisson statistics tolerance (Step 3).** Evaluated over bins with expected counts $\mu = \text{scale} \times \text{expected} \ge 20$.
+  For normalized residuals $z = (m - \mu) / \sqrt{\mu}$, measured per-seed mean $|z| \le 0.053$, standard deviation in $[0.969, 1.036]$.
+  Measured pooled statistics across 5 seeds: mean $-0.0055$, standard deviation $1.0117$.
+  Thresholds set: per-seed $|\text{mean}| < 0.10$, $\text{std} \in [0.90, 1.10]$; pooled $|\text{mean}| < 0.05$, $\text{std} \in [0.95, 1.05]$.
+- **T9. Scan mass conservation tolerance (Step 3).**
+  Measured absolute difference $|\sum \text{expected} - n_{angles} \times \sum \text{block\_mean}(\text{fine\_truth})|$ is $0.0$ at $n=64$ and $1.46 \times 10^{-11}$ at $n=128$.
+  Test tolerance threshold set to $10^{-8}$ (margin of $>10^2$ over floating-point arithmetic).
+- **T10. Inverse-crime guard relative L2 difference bounds (Step 3).**
+  Comparing fine-pipeline binned projections `expected` against coarse operator projection $A_{coarse} x_{coarse}$:
+  measured relative L2 difference is $0.0223$ ($2.23\%$) at $n=64$ ($30$ angles) and $0.0181$ ($1.81\%$) at $n=128$ ($60$ angles).
+  Bounds set: upper bound $0.050$, non-zero lower bound $0.005$ (preventing inverse crime / trivial operator reuse).

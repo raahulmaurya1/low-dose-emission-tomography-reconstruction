@@ -321,3 +321,109 @@ back_ms_median5=4.664
 > .venv\Scripts\python.exe -m pytest -q
 27 passed in 5.36s
 ```
+
+---
+
+## Step 3: scan simulation (status: APPROVED by owner, 2026-10-05)
+
+### Library signatures verified
+
+```python
+# numpy.random.default_rng:
+default_rng(seed=None)
+
+# numpy.random.Generator.poisson:
+poisson(lam=1.0, size=None)
+```
+
+### Gate: failing test run (before implementation)
+
+```
+> .venv\Scripts\python.exe -m pytest -q tests/test_basics.py
+
+=================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_basics.py ____________________
+ImportError while importing test module 'D:\low-dose-CT-scan-reconstructio\tests\test_basics.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Users\Dell\AppData\Local\Programs\Python\Python312\Lib\importlib\__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_basics.py:8: in <module>
+    from scan import simulate_scan
+E   ImportError: cannot import name 'simulate_scan' from 'scan' (D:\low-dose-CT-scan-reconstructio\src\scan.py)
+=========================== short test summary info ===========================
+ERROR tests/test_basics.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 2.75s
+```
+
+### Gate: passing test run (after implementation)
+
+```
+> .venv\Scripts\python.exe -m pytest -v tests/test_basics.py
+
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- D:\low-dose-CT-scan-reconstructio\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: D:\low-dose-CT-scan-reconstructio
+configfile: pytest.ini
+collecting ... collected 19 items
+
+tests/test_basics.py::test_import_config_defaults PASSED                 [  5%]
+tests/test_basics.py::test_phantom_shape_range_mask[64] PASSED           [ 10%]
+tests/test_basics.py::test_phantom_shape_range_mask[128] PASSED          [ 15%]
+tests/test_basics.py::test_fine_phantom_and_block_mean[64] PASSED        [ 21%]
+tests/test_basics.py::test_fine_phantom_and_block_mean[128] PASSED       [ 26%]
+tests/test_basics.py::test_lesion_and_background_rois[64] PASSED         [ 31%]
+tests/test_basics.py::test_lesion_and_background_rois[128] PASSED        [ 36%]
+tests/test_basics.py::test_lesion_contrast_parameter PASSED              [ 42%]
+tests/test_basics.py::test_psnr_metrics PASSED                           [ 47%]
+tests/test_basics.py::test_ssim_metric PASSED                            [ 52%]
+tests/test_basics.py::test_contrast_and_noise_hand_computed PASSED       [ 57%]
+tests/test_basics.py::test_score_dict PASSED                             [ 63%]
+tests/test_basics.py::test_simulate_scan_reproducibility PASSED          [ 68%]
+tests/test_basics.py::test_simulate_scan_shape_and_values PASSED         [ 73%]
+tests/test_basics.py::test_simulate_scan_total_counts PASSED             [ 78%]
+tests/test_basics.py::test_simulate_scan_poisson_statistics PASSED       [ 84%]
+tests/test_basics.py::test_simulate_scan_mass_conservation PASSED        [ 89%]
+tests/test_basics.py::test_simulate_scan_inverse_crime_guard PASSED      [ 94%]
+tests/test_basics.py::test_simulate_scan_a_fine_caching_and_validation PASSED [100%]
+
+============================= 19 passed in 5.58s ==============================
+```
+
+### Mutation checks with SHA-256
+
+- Baseline SHA-256 of `src\scan.py`:
+  `2C99DBC7B940D1264DD1700F6D6A5ED2CE99A3A408F85030219381D2A756F760`
+
+1. **Mutation (1): Drop the `/4`**
+   - Modified `fine_activity = fine_truth`
+   - pytest output:
+     `FAILED tests/test_basics.py::test_simulate_scan_mass_conservation - assert np.float64(45415.409824227405) < 1e-08`
+     `FAILED tests/test_basics.py::test_simulate_scan_inverse_crime_guard - assert np.float64(3.0087636134555478) < 0.05`
+     `2 failed, 17 passed in 3.49s`
+
+2. **Mutation (2): Shift pair binning by one detector bin**
+   - Modified `fine_proj_2d = np.roll(fine_proj.reshape(n_angles, 2 * (n + 2)), 1, axis=1)`
+   - pytest output:
+     `FAILED tests/test_basics.py::test_simulate_scan_inverse_crime_guard - assert np.float64(0.09641741100411627) < 0.05`
+     `1 failed, 18 passed in 3.87s`
+
+3. **Mutation (3): Replace fine pipeline by coarse operator applied to block_mean(fine_truth)**
+   - Modified `expected = (build_operator(n, thetas_deg_arr, n_det=n + 2) @ block_mean(fine_truth).ravel()).reshape(n_angles, n + 2)`
+   - pytest output:
+     `FAILED tests/test_basics.py::test_simulate_scan_inverse_crime_guard - assert 0.005 < np.float64(0.0)`
+     `1 failed, 18 passed in 2.59s`
+
+- Restored file and re-computed SHA-256 of `src\scan.py`:
+  `2C99DBC7B940D1264DD1700F6D6A5ED2CE99A3A408F85030219381D2A756F760` (IDENTICAL)
+
+### Full test suite run (after restoration)
+
+```
+> .venv\Scripts\python.exe -m pytest -q
+..................................                                       [100%]
+34 passed in 5.52s
+```
