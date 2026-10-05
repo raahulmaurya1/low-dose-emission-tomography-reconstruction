@@ -161,6 +161,21 @@ def test_cross_check_skimage_radon():
     assert corr > 0.95
 
 
+def test_cross_check_skimage_radon_odd_n():
+    """(Step 2c) Odd n=63 cross-check: rotation centre index n//2 coincides with (n-1)/2.0."""
+    n = 63
+    img = _smooth_asymmetric(n)
+    thetas = np.linspace(0, 180, 30, endpoint=False)
+
+    A = build_operator(n, thetas)
+    p_op = (A @ img.ravel()).reshape(len(thetas), n + 2)[:, 1:-1]
+    p_radon = skimage.transform.radon(img[::-1, :], theta=thetas, circle=True).T
+
+    corr = np.corrcoef(p_op.ravel(), p_radon.ravel())[0, 1]
+    # Measured 0.999992; threshold 0.999
+    assert corr > 0.999
+
+
 def test_centred_disk_symmetry_and_invariance():
     """(f) Centred disk: symmetric profiles that agree across angles within measured tolerance."""
     n = 64
