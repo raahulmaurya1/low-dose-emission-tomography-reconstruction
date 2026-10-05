@@ -147,11 +147,177 @@ ERROR tests/test_basics.py
 
 ### Final test run (after revision 2)
 
+---
+
+## Step 2: projector (status: APPROVED by owner, 2026-10-05)
+
+### Library signatures verified
+
+```python
+# skimage.transform.radon:
+radon(image, theta=None, circle=True, *, preserve_range=False)
+
+# scipy.sparse.csr_matrix:
+csr_matrix((data, (row_ind, col_ind)), shape=(M, N), dtype=None)
+```
+
+### Gate: failing test run (before implementation)
+
+```
+> .venv\Scripts\python.exe -m pytest -q tests/test_projector.py
+
+=================================== ERRORS ====================================
+__________________ ERROR collecting tests/test_projector.py ___________________
+ImportError while importing test module 'D:\sparse-view-low-dose-tomographic-reconstruction-final\tests\test_projector.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Users\Dell\AppData\Local\Programs\Python\Python312\Lib\importlib\__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_projector.py:10: in <module>
+    from projector import build_operator, CountingOperator
+E   ImportError: cannot import name 'build_operator' from 'projector' (D:\sparse-view-low-dose-tomographic-reconstruction-final\src\projector.py)
+=========================== short test summary info ===========================
+ERROR tests/test_projector.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.92s
+```
+
+### Gate: passing test run (after implementation)
+
+```
+> .venv\Scripts\python.exe -m pytest -v tests/test_projector.py
+
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- D:\sparse-view-low-dose-tomographic-reconstruction-final\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: D:\sparse-view-low-dose-tomographic-reconstruction-final
+configfile: pytest.ini
+collecting ... collected 9 items
+
+tests/test_projector.py::test_counting_operator_wrapper_and_adjoint PASSED [ 11%]
+tests/test_projector.py::test_column_sums_inside_mask PASSED             [ 22%]
+tests/test_projector.py::test_per_angle_mass_conservation PASSED         [ 33%]
+tests/test_projector.py::test_single_pixel_analytic_location_and_weights PASSED [ 44%]
+tests/test_projector.py::test_cross_check_reference_prototype_rotate PASSED [ 55%]
+tests/test_projector.py::test_cross_check_skimage_radon PASSED           [ 66%]
+tests/test_projector.py::test_centred_disk_symmetry_and_invariance PASSED [ 77%]
+tests/test_projector.py::test_fine_operator_consistency_and_pair_binning PASSED [ 88%]
+tests/test_projector.py::test_operator_shape_sparsity_and_benchmark PASSED [100%]
+
+============================== 9 passed in 3.04s ==============================
+```
+
+### Mutation checks with SHA-256
+
+- Baseline SHA-256 of `src\projector.py`:
+  `B1392499FF3132354F70FBCD55CB3D35E54ADE7DF3CAC754EA83A3B2E32814D1`
+
+1. **Mutation (1): Shift s by +0.5**
+   - Modified `s = ... + 0.5`
+   - pytest output:
+     `FAILED tests/test_projector.py::test_single_pixel_analytic_location_and_weights`
+     `FAILED tests/test_projector.py::test_cross_check_reference_prototype_rotate`
+     `FAILED tests/test_projector.py::test_centred_disk_symmetry_and_invariance`
+     `3 failed, 6 passed in 3.48s`
+
+2. **Mutation (2): Negate the angle**
+   - Modified `thetas_rad = -np.deg2rad(thetas_deg_arr)`
+   - pytest output:
+     `FAILED tests/test_projector.py::test_single_pixel_analytic_location_and_weights`
+     `FAILED tests/test_projector.py::test_cross_check_reference_prototype_rotate`
+     `2 failed, 7 passed in 2.81s`
+
+3. **Mutation (3): Nearest-bin only (drop linear weight)**
+   - Modified `b_near = np.round(u).astype(np.int64); vals = 1.0`
+   - pytest output:
+     `FAILED tests/test_projector.py::test_single_pixel_analytic_location_and_weights`
+     `FAILED tests/test_projector.py::test_cross_check_reference_prototype_rotate`
+     `FAILED tests/test_projector.py::test_centred_disk_symmetry_and_invariance`
+     `3 failed, 6 passed in 2.82s`
+
+- Restored file and re-computed SHA-256 of `src\projector.py`:
+  `B1392499FF3132354F70FBCD55CB3D35E54ADE7DF3CAC754EA83A3B2E32814D1` (IDENTICAL)
+
+### Full test suite run (after restoration)
+
 ```
 > .venv\Scripts\python.exe -m pytest -q
-............                                                             [100%]
-12 passed in 2.18s
+.....................                                                    [100%]
+21 passed in 3.27s
 ```
 
+### Operator measurements (n=128, 60 angles, n_det=130)
 
+- **Shape**: (7800, 16384)
+- **Non-zero entries (nnz)**: 1,863,160
+- **Density**: 1.458%
+- **Sparsity**: 98.542%
+- **Build time**: 368.90 ms
+- **Forward product time (A @ x)**: 5.043 ms
+- **Back product time (A.T @ y)**: 4.764 ms
 
+---
+
+## Step 2b: projector test strengthening + small fixes (status: APPROVED by owner, 2026-10-05)
+
+### Failing run (new tests, Step 2 code)
+
+```
+> .venv\Scripts\python.exe -m pytest -q tests/test_projector.py
+FAILED tests/test_projector.py::test_counting_operator_rejects_wrong_size - assert 2 == 0 (n_forward)
+FAILED tests/test_projector.py::test_scalar_theta_accepted - TypeError: object of type 'numpy.float64' has no len()
+FAILED tests/test_projector.py::test_operator_structure - assert np.all(A.data != 0.0) -> False
+3 failed, 12 passed in 7.12s
+```
+
+The hand-derived literal test passed on the Step 2 code (consistent with the hand arithmetic).
+
+### Passing run (after fixes)
+
+```
+> .venv\Scripts\python.exe -m pytest -q tests/test_projector.py
+15 passed in 4.13s
+```
+
+### Identity vs Step 2 reference (exact indptr/indices/data equality)
+
+```
+n= 32 angles= 1 ref_nnz_raw=    2048 ref_nnz_elim=    1024 new_nnz=    1024 identical=True
+n= 32 angles= 7 ref_nnz_raw=   13804 ref_nnz_elim=   12780 new_nnz=   12780 identical=True
+n= 32 angles=60 ref_nnz_raw=  118328 ref_nnz_elim=  116297 new_nnz=  116297 identical=True
+n= 64 angles= 1 ref_nnz_raw=    8192 ref_nnz_elim=    4096 new_nnz=    4096 identical=True
+n= 64 angles= 7 ref_nnz_raw=   54668 ref_nnz_elim=   50572 new_nnz=   50572 identical=True
+n= 64 angles=60 ref_nnz_raw=  468580 ref_nnz_elim=  460488 new_nnz=  460488 identical=True
+n=128 angles= 1 ref_nnz_raw=   32768 ref_nnz_elim=   16384 new_nnz=   16384 identical=True
+n=128 angles= 7 ref_nnz_raw=  217488 ref_nnz_elim=  201104 new_nnz=  201104 identical=True
+n=128 angles=60 ref_nnz_raw= 1863160 ref_nnz_elim= 1830797 new_nnz= 1830797 identical=True
+ALL IDENTICAL: True
+n=256, 180 angles, before (ref): peak=1500.3 MiB build=4.07s nnz=22285420
+n=256, 180 angles, after (new): peak=512.6 MiB build=2.13s nnz=22155987
+```
+
+### Mutations (baseline SHA-256 D466C48D75CCBC947D8D77CD25E56D313607D1833CE96BF302919B69FDEB8B5D)
+
+- (1) s + 0.5: 6 failed (literals, analytic x3, prototype 0.0807, disk symmetry 7.70). Skimage passed.
+- (2) negated angle: 6 failed (literals, analytic x3, prototype 1.049, skimage r=0.340).
+- (3) x/y swap: 6 failed (literals, analytic x3, prototype 1.089, skimage r=0.261).
+- SHA-256 after each restore: D466C48D75CCBC947D8D77CD25E56D313607D1833CE96BF302919B69FDEB8B5D (identical).
+
+### Benchmark (results/benchmark_projector.txt)
+
+```
+n=128 n_angles=60 n_det=130
+shape=(7800, 16384)
+nnz=1830797
+build_s_median5=0.2870
+forward_ms_median5=4.974
+back_ms_median5=4.664
+```
+
+### Final full run
+
+```
+> .venv\Scripts\python.exe -m pytest -q
+27 passed in 5.36s
+```

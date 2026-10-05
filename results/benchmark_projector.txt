@@ -1,0 +1,6 @@
+n=128 n_angles=60 n_det=130
+shape=(7800, 16384)
+nnz=1830797
+build_s_median5=0.1657
+forward_ms_median5=3.011
+back_ms_median5=3.009

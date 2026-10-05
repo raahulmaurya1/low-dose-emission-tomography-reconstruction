@@ -125,6 +125,46 @@ thresholds will be recorded as T1, T2, ... when they are measured.
 - **C5. SSIM** leaves the other skimage defaults unchanged (`use_sample_covariance=True`, `K1=0.01`,
   `K2=0.03`), as reported by `help()`.
 
+- **D30. Projector coordinate system and angle convention.**
+  - Image array indexing: `img[r, c]`, row $r \in [0, n-1]$ (downwards), col $c \in [0, n-1]$ (rightwards).
+  - Center: $c_{img} = (n - 1) / 2.0$.
+  - Coordinates: $x = c - c_{img}$ (horizontal), $y = r - c_{img}$ (vertical, pointing downwards).
+  - Projection: $s = x \cos\theta + y \sin\theta$, with $\theta$ in radians.
+  - Detector continuous coordinate: $u = s + (n_{det} - 1) / 2.0$.
+  - Linear interpolation: bin $b_0 = \lfloor u \rfloor$, $b_1 = b_0 + 1$; weights $w_1 = u - b_0$, $w_0 = 1 - w_1$.
+  - Relationship to reference prototype (`reference/tomo_step1.py`):
+    Matches `rotate(img, t).sum(axis=0)` directly because `scipy.ndimage.rotate` operates on (axis 0, axis 1) with row $r$ and col $c$ in the exact same orientation. Measured relative L2 difference is 0.0049 (~0.49%).
+  - Relationship to `skimage.transform.radon`:
+    `skimage.transform.radon(..., circle=True)` adopts Kak & Slaney's Cartesian convention where the vertical axis points UPWARDS ($y_{Cartesian} = -y$). Inverting image rows (`img[::-1, :]`) aligns the vertical coordinate, giving Pearson correlation > 0.98 (measured 0.983 on asymmetric Gaussian, and > 0.99 on centered symmetric Gaussian).
+
+- **D31. Step 2b (owner instructions).** Tests (d) and (e) use the default `n+2` operator with guard
+  bins dropped and an asymmetric image; (e) uses the D30 y-flip. Hand-derived literal test added
+  (n=32, n_det=34, pixel (10,20)). Wall-clock asserts removed; timings are written to
+  `results/benchmark_projector.txt` (median of 5). `build_operator` accepts scalar angles
+  (`np.atleast_1d`), calls `eliminate_zeros()` and `sort_indices()`, and is built one angle block at
+  a time (vectorised over pixels). `CountingOperator.forward/back` require an exact 1-D vector
+  (callers flatten), raise `ValueError` on wrongly shaped input, and do not count rejected calls.
+  - Deviation: the instruction said to save the reference with `git show HEAD:src/projector.py`, but
+    Step 2 was never committed, so HEAD holds only the 4-line stub. The reference used for the
+    identity check is the uncommitted, reviewed Step 2 file (SHA-256
+    `B1392499FF3132354F70FBCD55CB3D35E54ADE7DF3CAC754EA83A3B2E32814D1`), copied byte-for-byte to the
+    agent scratch directory.
+
+## Implementation choices (Step 2; made by the engineer, listed for owner review)
+
+- **C6. Fully vectorized projector construction.** Broadcasts angle indices $(1, n_{angles})$ and
+  pixel indices $(n*n, 1)$ across $(n*n, n_{angles})$. Evaluates $s$ and $u$ in vectorised numpy
+  operations without any Python loop over pixels. Masks valid detector bins within $[0, n_{det}-1]$
+  and constructs `scipy.sparse.csr_matrix` directly.
+- **C7. `CountingOperator` caching.** Computes and caches `AT = A.T.tocsr()` during initialization
+  for fast transpose-matrix products. Tracks `n_forward` and `n_back` integer call counts.
+
+- **C8. Per-angle construction (Step 2b).** Each angle builds a `csr_matrix [n_det, n*n]` block;
+  blocks are joined with `scipy.sparse.vstack(format="csr")`. The result is exactly identical
+  (indptr, indices, data) to the Step 2 matrix after `eliminate_zeros()` + `sort_indices()` for
+  n in (32, 64, 128) x angles in (1, 7, 60). Peak traced memory at n=256, 180 angles:
+  1500.3 MiB -> 512.6 MiB.
+
 ## Open questions
 
 - **O1.** Resolved by D21.
@@ -139,5 +179,22 @@ thresholds will be recorded as T1, T2, ... when they are measured.
   numerical precision.
 - **T2. Block mean downsampling tolerance.** Max absolute difference between block_mean(make_fine_phantom)
   and coarse phantom truth is 0.0 (measured <= 1e-16). Test tolerance is set to `1e-14`.
+- **T3. Prototype cross-check relative L2 tolerance (re-measured Step 2b).** Default `n+2` operator,
+  guard bins dropped (`[:, 1:-1]`), offset anisotropic Gaussian at n=64, 30 angles, vs
+  `tomo_step1.py` rotate-and-sum `forward()`: measured 0.003556. Threshold `0.010` (~2.8x margin).
+  Mutations measured against it: s+0.5 -> 0.0807, negated angle -> 1.049, x/y swap -> 1.089.
+- **T4. Skimage radon correlation threshold (re-measured Step 2b).** Same asymmetric image, default
+  `n+2` operator with guard bins dropped, vs `radon(img[::-1, :], theta, circle=True).T` (D30 y-flip):
+  measured Pearson r = 0.98552 (without the y-flip: 0.208). Threshold `0.95` (margin 0.035).
+  Mutations measured against it: negated angle -> 0.340, x/y swap -> 0.261 (both fail).
+  The residual 1.4% is attributed to radon's rotation centre at index n//2 (vs (n-1)/2 here) and its
+  different interpolation; not investigated further.
+- **T5. Centered disk angular variation tolerance.** Measured relative variation of projection
+  profiles across 30 angles on Cartesian grid is 0.0305 (~3.05%). Test threshold is set to `0.050`.
+- **T6. Centered disk profile symmetry tolerance.** Measured asymmetry error |p(s) - p(-s)| is
+  <= 3.55e-14. Test threshold is set to `1e-12`.
+- **T7. Column sum & mass conservation tolerance.** Measured deviation for mask pixels and
+  mask-supported images is <= 1.71e-13. Test threshold is set to `1e-12`.
+
 
 
