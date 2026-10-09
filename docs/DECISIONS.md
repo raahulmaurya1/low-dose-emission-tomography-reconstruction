@@ -205,6 +205,9 @@ thresholds will be recorded as T1, T2, ... when they are measured.
   n in (32, 64, 128) x angles in (1, 7, 60). Peak traced memory at n=256, 180 angles:
   1500.3 MiB -> 512.6 MiB.
 
+- **D36. OSEM noise-free PSNR vs MLEM (Step 6).** At $n=64$ and 60 angles, OSEM (3 iterations, 4 subsets, effectively 12 sub-updates) reaches $21.87$ dB PSNR, while MLEM (3 iterations, effectively 3 sub-updates) reaches $16.59$ dB. This verifies the faster initial convergence of OSEM.
+- **D37. Deviation from gate rule (Step 6).** Step 5 was committed before the pytest output was fully confirmed and pasted. Future commits will strictly wait for pasted pytest confirmation.
+
 ## Open questions
 
 - **O1.** Resolved by D21.

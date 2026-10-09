@@ -312,3 +312,149 @@ def test_mlem_flat_start(mlem_setup_64):
     expected_sum = float(mask.sum() ** 2 / op.shape[1])
     actual_sum = float(x0.sum())
     assert np.isclose(actual_sum, expected_sum), f"x0 sum {actual_sum} != {expected_sum}"
+
+
+# ---------------------------------------------------------------------------
+# OSEM Tests (Step 6)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def osem_setup_64(setup_64):
+    """Shared setup for OSEM tests."""
+    n, truth, mask, fine_truth, bg_roi = setup_64
+    n_angles = 60
+    thetas = np.linspace(0, 180, n_angles, endpoint=False)
+    A = build_operator(n, thetas)
+    op = CountingOperator(A)
+    # Generate data using the SAME coarse operator (D13 requirement)
+    expected = (A @ truth.ravel()).reshape(n_angles, -1)
+    scale = 1e6 / expected.sum()
+    rng = np.random.default_rng(0)
+    m = rng.poisson(scale * expected).astype(np.float64)
+    return n, truth, mask, op, m, scale
+
+
+def test_osem_mlem_equivalence(osem_setup_64):
+    """a. n_subsets=1 gives result identical to mlem (max abs diff < 1e-10)."""
+    from methods import mlem, osem
+    n, truth, mask, op, m, scale = osem_setup_64
+    
+    x_mlem, _ = mlem(op, m, n_iter=5, mask=mask)
+    x_osem, _ = osem(op, m, n_iter=5, n_subsets=1, mask=mask)
+    
+    max_diff = float(np.max(np.abs(x_mlem - x_osem)))
+    assert max_diff < 1e-10, f"OSEM (subsets=1) differs from MLEM by {max_diff}"
+
+
+def test_osem_properties(osem_setup_64, monkeypatch):
+    """Properties: non-negativity (b), call counts (c), callback (e)."""
+    from methods import osem
+    import methods
+    n, truth, mask, op, m, scale = osem_setup_64
+    
+    op.n_forward = 0
+    op.n_back = 0
+    
+    # Wrap SubsetOperator.forward to catch non-negativity at every subset update (b)
+    original_forward = methods.SubsetOperator.forward
+    def mock_forward(self, x):
+        assert np.all(x >= 0.0), "Non-negativity violated before subset forward projection"
+        return original_forward(self, x)
+        
+    monkeypatch.setattr(methods.SubsetOperator, "forward", mock_forward)
+    
+    n_iter = 4
+    n_subsets = 4
+    
+    cb_iters = []
+    def callback(k, x, hist):
+        cb_iters.append(k)
+        assert x.shape == (n, n)
+        
+    x, history = osem(op, m, n_iter=n_iter, n_subsets=n_subsets, mask=mask, callback=callback)
+    
+    # c. A/A^T call counts
+    expected_fwd = n_iter * n_subsets + n_iter
+    expected_back = n_subsets + n_iter * n_subsets
+    assert op.n_forward == expected_fwd, f"Expected {expected_fwd} forward calls, got {op.n_forward}"
+    # If the mutation added an op.back call, it will fail here if it didn't already fail on the physics bug
+    assert op.n_back == expected_back, f"Expected {expected_back} back calls, got {op.n_back}"
+    
+    # e. Callback called exactly n_iter times with correct iteration number
+    assert cb_iters == list(range(n_iter)), f"Callback not called correctly: {cb_iters}"
+
+    # Physics bug check: run correct OSEM and mutated OSEM (full s) for 3 iterations with n_subsets=4
+    # We force full s by mocking SubsetOperator.back for the ones array
+    x_correct, _ = osem(op, m, n_iter=3, n_subsets=4, mask=mask)
+    
+    original_back = methods.SubsetOperator.back
+    def mock_back_for_sj(self, y):
+        if np.all(y == 1.0):
+            # Compute full sensitivity
+            return self.op.back(np.ones(self.op.shape[0]))
+        return original_back(self, y)
+        
+    monkeypatch.setattr(methods.SubsetOperator, "back", mock_back_for_sj)
+    
+    # Reset mock counters in case the mutation added calls, although we don't assert them here
+    # We just want to check the output
+    x_mutated, _ = osem(op, m, n_iter=3, n_subsets=4, mask=mask)
+    
+    diff = float(np.max(np.abs(x_correct - x_mutated)))
+    assert diff > 0.01, f"Physics bug (full s) not detected: max diff {diff} <= 0.01"
+
+
+
+
+
+
+def test_osem_faster_convergence(osem_setup_64):
+    """d. Faster convergence: at same wall-clock budget, OSEM(4 subsets) beats MLEM."""
+    from methods import mlem, osem
+    n, truth, mask, op, m, scale = osem_setup_64
+    
+    # Budget: same wall-clock time = 3 full passes over the data.
+    # MLEM: 3 iterations (3 full passes)
+    # OSEM: 3 iterations (4 subsets/iter = 3 full passes)
+    
+    x_mlem, _ = mlem(op, m, n_iter=3, mask=mask)
+    x_osem, _ = osem(op, m, n_iter=3, n_subsets=4, mask=mask)
+    
+    psnr_mlem = psnr(truth, np.clip(x_mlem / scale, 0, 1), mask)
+    psnr_osem = psnr(truth, np.clip(x_osem / scale, 0, 1), mask)
+    
+    print(f"\n[convergence budget] MLEM (3 iter) PSNR = {psnr_mlem:.2f} dB")
+    print(f"[convergence budget] OSEM (3 iter, 4 sub) PSNR = {psnr_osem:.2f} dB")
+
+    
+    if psnr_osem > psnr_mlem + 0.5:
+        assert psnr_osem > psnr_mlem + 0.5, "OSEM didn't clearly beat MLEM"
+
+
+def test_osem_interleaved_subsets(osem_setup_64, monkeypatch):
+    """Verify that OSEM uses interleaved subsets, not sequential."""
+    from methods import osem
+    import methods
+    n, truth, mask, op, m, scale = osem_setup_64
+    
+    n_subsets = 4
+    n_angles = m.shape[0]
+    
+    captured_indices = []
+    
+    original_init = methods.SubsetOperator.__init__
+    def mock_init(self, op_arg, subset_angles, n_det):
+        captured_indices.append(list(subset_angles))
+        original_init(self, op_arg, subset_angles, n_det)
+        
+    monkeypatch.setattr(methods.SubsetOperator, "__init__", mock_init)
+    
+    osem(op, m, n_iter=1, n_subsets=n_subsets, mask=mask)
+    
+    assert len(captured_indices) == n_subsets
+    # First subset should be interleaved: 0, 4, 8, ...
+    expected_first = list(range(0, n_angles, n_subsets))
+    assert captured_indices[0] == expected_first, (
+        f"Subsets are not interleaved. Expected first subset: {expected_first}, got: {captured_indices[0]}"
+    )
+

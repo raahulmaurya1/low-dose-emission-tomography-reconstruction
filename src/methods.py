@@ -158,3 +158,116 @@ def mlem(
             callback(k, x, history[-1])
 
     return x, history
+
+
+class SubsetOperator:
+    """Sub-operator for OSEM that uses only specific angle rows of the full A matrix."""
+    def __init__(self, op: CountingOperator, subset_angles: np.ndarray, n_det: int):
+        self.op = op
+        rows = np.concatenate([np.arange(a * n_det, (a + 1) * n_det) for a in subset_angles])
+        self.A_sub = op.A[rows, :]
+        self.AT_sub = self.A_sub.T.tocsr()
+        
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        self.op.n_forward += 1
+        return self.A_sub @ x
+        
+    def back(self, y: np.ndarray) -> np.ndarray:
+        self.op.n_back += 1
+        return self.AT_sub @ y
+
+
+def osem(
+    op: CountingOperator,
+    m: np.ndarray,
+    n_iter: int,
+    n_subsets: int,
+    mask: np.ndarray,
+    callback=None,
+) -> tuple[np.ndarray, list[dict]]:
+    """Ordered Subsets Expectation Maximization (OSEM) reconstruction.
+    
+    Parameters
+    ----------
+    op : CountingOperator
+        Coarse projection operator wrapping sparse A.
+    m : np.ndarray
+        Sinogram [n_angles, n_det], float64.
+    n_iter : int
+        Number of iterations (full passes).
+    n_subsets : int
+        Number of subsets.
+    mask : np.ndarray
+        Boolean inscribed-circle mask [n, n].
+    callback : callable, optional
+        Callback function called after each iteration as callback(k, x, history[-1]).
+        
+    Returns
+    -------
+    x : np.ndarray
+        Reconstructed image [n, n].
+    history : list[dict]
+        List of iteration history dicts containing "iter" and "loglik" (full sinogram).
+    """
+    n_angles, n_det = m.shape
+    n_sq = op.shape[1]
+    n = int(round(np.sqrt(n_sq)))
+    m_flat = m.ravel().astype(np.float64)
+
+    # Flat start
+    x = mask.astype(np.float64) * float(mask.sum()) / float(n_sq)
+    
+    # Subsets: split n_angles into n_subsets interleaved groups
+    sub_ops = []
+    sub_m = []
+    sub_s = []
+    for j in range(n_subsets):
+        indices_j = np.arange(j, n_angles, n_subsets)
+        op_j = SubsetOperator(op, indices_j, n_det)
+        sub_ops.append(op_j)
+        
+        m_j = m[indices_j, :].ravel()
+        sub_m.append(m_j)
+        
+        # Sensitivity for subset j
+        s_j = op_j.back(np.ones_like(m_j))
+        s_j = np.maximum(s_j, 1e-6)
+        s_j = s_j.reshape(n, n)
+        s_j[~mask] = 0.0
+        sub_s.append(s_j)
+
+    history = []
+    eps = 1e-9
+
+    for k in range(n_iter):
+        for j in range(n_subsets):
+            op_j = sub_ops[j]
+            m_j = sub_m[j]
+            s_j = sub_s[j]
+            
+            ax_j = op_j.forward(x.ravel())
+            
+            ratio_j = m_j / np.maximum(ax_j, eps)
+            back_ratio_j = op_j.back(ratio_j).reshape(n, n)
+            
+            # MUTATION 2: use the full sensitivity s instead of s_j
+            with np.errstate(divide="ignore", invalid="ignore"):
+                x = x / s_j * back_ratio_j
+            
+            # MUTATION 3: skip zeroing outside mask after each subset
+            x[~mask] = 0.0
+
+
+
+
+        # Log-likelihood (full sinogram)
+        ax_full = op.forward(x.ravel())
+        ax_eps = ax_full + eps
+        loglik = float(np.sum(m_flat * np.log(ax_eps) - ax_eps))
+        history.append({"iter": k, "loglik": loglik})
+        
+        if callback is not None:
+            callback(k, x, history[-1])
+
+    return x, history
+
