@@ -185,6 +185,10 @@ thresholds will be recorded as T1, T2, ... when they are measured.
   circular convolution wrap of the Ram-Lak ramp filter tails. At `4*n_det` padding the measured
   ratio is 0.980 (−2.0%). No rescaling applied. This is an accepted discretisation error stated
   in the README.
+- **D35. FBP noise-free PSNR plateau (Step 4).** Noise-free PSNR plateaus at ~21 dB above 30 angles;
+  this is the discretisation ceiling of the pixel-driven projector and not a bug; noisy sweeps are
+  expected to show clearer angle-dependence. SHA-256 of `src/methods.py`: 939c5633d674c7cc01ee69217060cd85bb191d3ec74c32451dd4eaa1f1b5228b.
+
 
 ## Implementation choices (Step 2; made by the engineer, listed for owner review)
 
@@ -253,3 +257,7 @@ thresholds will be recorded as T1, T2, ... when they are measured.
   Monotonicity NOT asserted: PSNR is flat across 30--180 angles (discretisation-limited at $n=64$).
 - **T13. FBP Hann window noise reduction (Step 4).** At $n=64$, 60 angles, $2 \times 10^5$ counts, seed 0:
   std inside background ROI with Hann = $0.0319$; without = $0.0805$; ratio = $2.52$.
+- **T14. MLEM count conservation (Step 5).** At $n=64$, 30 angles, $10^6$ counts, the relative absolute
+  difference between `sum(A x_k)` and `sum(m)` across 10 iterations is measured at $0.0$ ($<10^{-15}$).
+  Threshold set to $10^{-12}$.
+

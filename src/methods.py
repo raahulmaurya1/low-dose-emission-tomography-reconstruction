@@ -85,3 +85,76 @@ def fbp(
     rec[~mask] = 0.0
 
     return rec
+
+
+def mlem(
+    op: CountingOperator,
+    m: np.ndarray,
+    n_iter: int,
+    mask: np.ndarray,
+    callback=None,
+) -> tuple[np.ndarray, list[dict]]:
+    """Maximum Likelihood Expectation Maximization (MLEM) reconstruction.
+
+    Parameters
+    ----------
+    op : CountingOperator
+        Coarse projection operator wrapping sparse A.
+    m : np.ndarray
+        Sinogram [n_angles, n_det], float64.
+    n_iter : int
+        Number of iterations.
+    mask : np.ndarray
+        Boolean inscribed-circle mask [n, n].
+    callback : callable, optional
+        Callback function called after each iteration as callback(k, x, history[-1]).
+
+    Returns
+    -------
+    x : np.ndarray
+        Reconstructed image [n, n].
+    history : list[dict]
+        List of iteration history dicts containing "iter" and "loglik".
+    """
+    n_sq = op.shape[1]
+    n = int(round(np.sqrt(n_sq)))
+    m_flat = m.ravel().astype(np.float64)
+
+    # Flat start
+    x = mask.astype(np.float64) * float(mask.sum()) / float(n_sq)
+
+    # Sensitivity image
+    s = op.back(np.ones_like(m_flat))
+    s = np.maximum(s, 1e-6)
+    s = s.reshape(n, n)
+    s[~mask] = 0.0
+
+    history = []
+    
+    eps = 1e-9
+
+    for k in range(n_iter):
+        ax = op.forward(x.ravel())
+        
+        # Log-likelihood
+        ax_eps = ax + eps
+        loglik = float(np.sum(m_flat * np.log(ax_eps) - ax_eps))
+        history.append({"iter": k, "loglik": loglik})
+        
+        # Update
+        ratio = m_flat / np.maximum(ax, eps)
+        back_ratio = op.back(ratio).reshape(n, n)
+        
+        # MUTATION 1: remove /s step (no sensitivity correction)
+        # MUTATION 2: use additive update x = x + ratio instead of multiplicative
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x = x / s * back_ratio
+        
+        # MUTATION 3: skip zeroing outside mask
+        x[~mask] = 0.0
+
+        
+        if callback is not None:
+            callback(k, x, history[-1])
+
+    return x, history

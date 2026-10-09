@@ -427,3 +427,64 @@ tests/test_basics.py::test_simulate_scan_a_fine_caching_and_validation PASSED [1
 ..................................                                       [100%]
 34 passed in 5.52s
 ```
+
+---
+
+## Step 4: FBP (status: APPROVED by owner, 2026-10-09)
+
+### Gate: failing test run (before implementation)
+
+```
+> .venv\Scripts\python.exe -m pytest -q tests/test_methods.py
+FFFFF                                                                    [100%]
+...
+FAILED tests/test_methods.py::test_fbp_amplitude_background_roi - ImportError: cannot import name 'fbp' from 'methods'
+...
+5 failed in 4.01s
+```
+
+### Gate: passing test run (after implementation)
+
+```
+> .venv\Scripts\python.exe -m pytest -v -s tests/test_methods.py
+tests/test_methods.py::test_fbp_amplitude_background_roi 
+[amplitude] truth_mean=0.200000  rec_mean=0.196022  ratio=0.980111
+PASSED
+tests/test_methods.py::test_fbp_noisefree_psnr 
+[psnr] 180 angles: 21.03 dB
+...
+PASSED
+tests/test_methods.py::test_fbp_linearity 
+[linearity] max abs diff = 8.88e-15
+PASSED
+tests/test_methods.py::test_fbp_impulse_argmax 
+...
+PASSED
+tests/test_methods.py::test_fbp_window_noise_reduction 
+[window] std_hann=0.031943  std_none=0.080496  ratio=2.520
+PASSED
+============================== 5 passed in 4.71s ==============================
+```
+
+### Mutation checks with SHA-256
+
+- Baseline SHA-256 of `src\methods.py`: `939c5633d674c7cc01ee69217060cd85bb191d3ec74c32451dd4eaa1f1b5228b`
+
+1. **Mutation 1 (drop pi/n_angles scaling):**
+   - 3 failed, 2 passed.
+
+2. **Mutation 2 (skip ramp filter):**
+   - 3 failed, 2 passed.
+
+3. **Mutation 3 (filter along angle axis):**
+   - 2 failed, 3 passed.
+
+- Restored file and re-computed SHA-256 of `src\methods.py`: `939c5633d674c7cc01ee69217060cd85bb191d3ec74c32451dd4eaa1f1b5228b` (IDENTICAL)
+
+### Full test suite run
+
+```
+> .venv\Scripts\python.exe -m pytest -q
+........................................                                 [100%]
+40 passed in 11.13s
+```
