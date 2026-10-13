@@ -265,9 +265,133 @@ def osem(
         ax_eps = ax_full + eps
         loglik = float(np.sum(m_flat * np.log(ax_eps) - ax_eps))
         history.append({"iter": k, "loglik": loglik})
-        
         if callback is not None:
             callback(k, x, history[-1])
 
     return x, history
+
+
+def grad_tv(
+    u: np.ndarray,
+    eps: float = 1e-4,
+    mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute the gradient of isotropic Total Variation with smoothing eps.
+
+    Parameters
+    ----------
+    u : np.ndarray
+        Input image [n, n], float64.
+    eps : float
+        Smoothing parameter inside square root.
+    mask : np.ndarray, optional
+        Boolean inscribed-circle mask [n, n]. If provided, gradient is zeroed outside.
+
+    Returns
+    -------
+    tv_grad : np.ndarray
+        TV gradient image [n, n].
+    """
+    u_right = np.roll(u, -1, axis=1)
+    u_down = np.roll(u, -1, axis=0)
+    u_left = np.roll(u, 1, axis=1)
+    u_up = np.roll(u, 1, axis=0)
+
+    denom = np.sqrt((u - u_right) ** 2 + (u - u_down) ** 2 + eps ** 2)
+    denom_left = np.roll(denom, 1, axis=1)
+    denom_up = np.roll(denom, 1, axis=0)
+
+    tv_grad = (
+        (u - u_right) / denom
+        + (u - u_down) / denom
+        - (u_left - u) / denom_left
+        - (u_up - u) / denom_up
+    )
+    if mask is not None:
+        tv_grad[~mask] = 0.0
+    return tv_grad
+
+
+def mlem_tv(
+    op: CountingOperator,
+    m: np.ndarray,
+    n_iter: int,
+    beta: float,
+    mask: np.ndarray,
+    scale: float,
+    callback=None,
+) -> tuple[np.ndarray, list[dict]]:
+    """Maximum Likelihood Expectation Maximization with TV regularization (One-Step-Late).
+
+    Parameters
+    ----------
+    op : CountingOperator
+        Coarse projection operator wrapping sparse A.
+    m : np.ndarray
+        Sinogram [n_angles, n_det], float64.
+    n_iter : int
+        Number of iterations.
+    beta : float
+        TV regularization parameter.
+    mask : np.ndarray
+        Boolean inscribed-circle mask [n, n].
+    scale : float
+        Data scaling factor, TV is evaluated on u = x / scale.
+    callback : callable, optional
+        Callback function called after each iteration as callback(k, x, history[-1]).
+
+    Returns
+    -------
+    x : np.ndarray
+        Reconstructed image [n, n].
+    history : list[dict]
+        List of iteration history dicts containing "iter" and "loglik".
+    """
+    n_sq = op.shape[1]
+    n = int(round(np.sqrt(n_sq)))
+    m_flat = m.ravel().astype(np.float64)
+
+    # Flat start
+    x = mask.astype(np.float64) * float(mask.sum()) / float(n_sq)
+
+    # Sensitivity image s = op.back(ones), floored 1e-6, zeroed outside mask
+    s = op.back(np.ones_like(m_flat))
+    s = np.maximum(s, 1e-6)
+    s = s.reshape(n, n)
+    s[~mask] = 0.0
+
+    history = []
+    eps_mlem = 1e-9
+
+    for k in range(n_iter):
+        Ax = op.forward(x.ravel())
+
+        # Log-likelihood
+        ax_eps = Ax + eps_mlem
+        loglik = float(np.sum(m_flat * np.log(ax_eps) - ax_eps))
+        history.append({"iter": k, "loglik": loglik})
+
+        ratio = m_flat / np.maximum(Ax, eps_mlem)
+        back_ratio = op.back(ratio).reshape(n, n)
+
+        # TV evaluated on u = x / scale
+        u = x / scale
+        g = grad_tv(u, eps=1e-4, mask=mask)
+
+        # One-step-late denominator
+        s_tv = s + beta * g
+        s_tv = np.maximum(s_tv, 1e-6)
+        s_tv[~mask] = 0.0
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x = x / s_tv * back_ratio
+
+        # Zero outside mask
+        x[~mask] = 0.0
+
+        if callback is not None:
+            callback(k, x, history[-1])
+
+    return x, history
+
 

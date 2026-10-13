@@ -458,3 +458,164 @@ def test_osem_interleaved_subsets(osem_setup_64, monkeypatch):
         f"Subsets are not interleaved. Expected first subset: {expected_first}, got: {captured_indices[0]}"
     )
 
+
+# ---------------------------------------------------------------------------
+# MLEM+TV Tests (Step 7)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def mlemtv_setup_64(setup_64):
+    """Shared setup for MLEM-TV tests."""
+    n, truth, mask, fine_truth, bg_roi = setup_64
+    n_angles = 30
+    thetas = np.linspace(0, 180, n_angles, endpoint=False)
+    A = build_operator(n, thetas)
+    op = CountingOperator(A)
+    expected = (A @ truth.ravel()).reshape(n_angles, -1)
+    scale = 1e6 / expected.sum()
+    rng = np.random.default_rng(0)
+    m = rng.poisson(scale * expected).astype(np.float64)
+    return n, truth, mask, op, m, scale, bg_roi
+
+
+def test_mlemtv_mlem_equivalence(mlemtv_setup_64):
+    """a. beta=0 gives result identical to mlem (max abs diff < 1e-10)."""
+    from methods import mlem, mlem_tv
+    n, truth, mask, op, m, scale, bg_roi = mlemtv_setup_64
+
+    x_mlem, _ = mlem(op, m, n_iter=5, mask=mask)
+    x_mlemtv, _ = mlem_tv(op, m, n_iter=5, beta=0.0, mask=mask, scale=scale)
+
+    max_diff = float(np.max(np.abs(x_mlem - x_mlemtv)))
+    assert max_diff < 1e-10, f"MLEM-TV (beta=0) differs from MLEM by {max_diff}"
+
+
+def test_mlemtv_nonnegativity(mlemtv_setup_64):
+    """b. Non-negativity at every iteration (standard beta and large beta with floored s_tv)."""
+    from methods import mlem_tv
+    n, truth, mask, op, m, scale, bg_roi = mlemtv_setup_64
+
+    # 1. Standard beta
+    def callback_std(k, x, hist):
+        assert x.shape == (n, n)
+        assert np.all(x >= 0.0), f"Standard beta iter {k}: non-negativity violated"
+        assert np.all(x[~mask] == 0.0), f"Standard beta iter {k}: values outside mask"
+
+    x, _ = mlem_tv(op, m, n_iter=4, beta=0.1, mask=mask, scale=scale, callback=callback_std)
+    assert np.all(x >= 0.0)
+
+    # 2. Large beta: s_tv would go negative without flooring at 1e-6 (catches Mutation 3)
+    def callback_large(k, x, hist):
+        assert np.all(x >= 0.0), f"Large beta iter {k}: non-negativity violated (s_tv flooring skipped)"
+
+    x_large, _ = mlem_tv(op, m, n_iter=3, beta=100.0, mask=mask, scale=scale, callback=callback_large)
+    assert np.all(x_large >= 0.0)
+
+
+def test_mlemtv_grad_tv_analytic():
+    """c. TV gradient finite-difference check: compare grad_tv against numerical gradient of TV functional.
+
+    T15: On a 16x16 random image, measured max absolute difference is 9.42e-09,
+    measured relative error is 2.77e-09.
+    Threshold set to 1e-5 (margin > 1e2 over measured error).
+    """
+    from methods import grad_tv
+
+    n = 16
+    rng = np.random.default_rng(42)
+    u = rng.uniform(0.1, 0.9, (n, n))
+    eps = 1e-4
+
+    def tv_functional(arr):
+        u_right = np.roll(arr, -1, axis=1)
+        u_down = np.roll(arr, -1, axis=0)
+        return np.sum(np.sqrt((arr - u_right)**2 + (arr - u_down)**2 + eps**2))
+
+    g_analytic = grad_tv(u, eps=eps)
+
+    # Central finite differences
+    delta = 1e-6
+    g_fd = np.zeros_like(u)
+    for i in range(n):
+        for j in range(n):
+            u_plus = u.copy()
+            u_plus[i, j] += delta
+            u_minus = u.copy()
+            u_minus[i, j] -= delta
+            g_fd[i, j] = (tv_functional(u_plus) - tv_functional(u_minus)) / (2.0 * delta)
+
+    max_diff = float(np.max(np.abs(g_analytic - g_fd)))
+    rel_error = float(max_diff / np.max(np.abs(g_fd)))
+
+    print(f"\n[grad_tv] max abs diff = {max_diff:.3e}, rel error = {rel_error:.3e}")
+
+    # T15: threshold 1e-5 (margin > 1e2 over measured 2.77e-09)
+    assert rel_error < 1e-5, f"Analytic TV gradient deviates from FD by {rel_error:.3e}"
+
+
+def test_mlemtv_smoothing_effect(mlemtv_setup_64):
+    """d. Smoothing effect: background ROI std is lower with beta>0 than beta=0.
+
+    Also tests scale normalization: TV must evaluate on u = x / scale, so smoothing
+    reduces noise across different count scales (catches Mutation 1 and Mutation 2).
+    """
+    from methods import mlem_tv
+    n, truth, mask, op, m, scale, bg_roi = mlemtv_setup_64
+
+    # Standard scale run (20 iterations)
+    x_beta0, _ = mlem_tv(op, m, n_iter=20, beta=0.0, mask=mask, scale=scale)
+    x_beta_pos, _ = mlem_tv(op, m, n_iter=20, beta=0.1, mask=mask, scale=scale)
+
+    std_0 = float(np.std(x_beta0[bg_roi] / scale))
+    std_pos = float(np.std(x_beta_pos[bg_roi] / scale))
+    ratio = std_0 / std_pos
+
+    print(f"\n[smoothing] std(beta=0) = {std_0:.6f}, std(beta=0.1) = {std_pos:.6f}, ratio = {ratio:.3f}")
+
+    assert std_pos < std_0, (
+        f"TV penalty did not reduce standard deviation in background ROI: std(beta=0.1)={std_pos:.6f} >= std(beta=0)={std_0:.6f}"
+    )
+
+    # Scale-normalization check: with low scale (scale=0.001), u = x / scale normalizes TV,
+    # ensuring smoothing reduces background noise. If u = x is used (Mutation 2),
+    # TV gradient distortion increases background noise (std_pos_low > std_0_low).
+    thetas = np.linspace(0, 180, 30, endpoint=False)
+    exp = (op.A @ truth.ravel()).reshape(30, -1)
+    scale_low = 0.001
+    rng_low = np.random.default_rng(0)
+    m_low = rng_low.poisson(scale_low * exp).astype(np.float64)
+
+    x_low_b0, _ = mlem_tv(op, m_low, n_iter=15, beta=0.0, mask=mask, scale=scale_low)
+    x_low_bpos, _ = mlem_tv(op, m_low, n_iter=15, beta=0.5, mask=mask, scale=scale_low)
+
+    std_0_low = float(np.std(x_low_b0[bg_roi] / scale_low))
+    std_pos_low = float(np.std(x_low_bpos[bg_roi] / scale_low))
+
+    assert std_pos_low < std_0_low, (
+        f"Scale normalization failed: TV did not reduce noise at low scale (u=x instead of u=x/scale). "
+        f"std(beta=0.5)={std_pos_low:.6f} >= std(beta=0)={std_0_low:.6f}"
+    )
+
+
+def test_mlemtv_callback(mlemtv_setup_64):
+    """e. Callback called exactly n_iter times with correct iteration number."""
+    from methods import mlem_tv
+    n, truth, mask, op, m, scale, bg_roi = mlemtv_setup_64
+
+    n_iter = 4
+    cb_iters = []
+
+    def callback(k, x, hist):
+        cb_iters.append(k)
+        assert x.shape == (n, n)
+        assert hist["iter"] == k
+        assert "loglik" in hist
+
+    x, history = mlem_tv(op, m, n_iter=n_iter, beta=0.1, mask=mask, scale=scale, callback=callback)
+
+    assert len(cb_iters) == n_iter
+    assert cb_iters == list(range(n_iter)), f"Callback iteration sequence invalid: {cb_iters}"
+    assert len(history) == n_iter
+
+
+

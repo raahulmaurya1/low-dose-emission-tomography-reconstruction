@@ -207,6 +207,11 @@ thresholds will be recorded as T1, T2, ... when they are measured.
 
 - **D36. OSEM noise-free PSNR vs MLEM (Step 6).** At $n=64$ and 60 angles, OSEM (3 iterations, 4 subsets, effectively 12 sub-updates) reaches $21.87$ dB PSNR, while MLEM (3 iterations, effectively 3 sub-updates) reaches $16.59$ dB. This verifies the faster initial convergence of OSEM.
 - **D37. Deviation from gate rule (Step 6).** Step 5 was committed before the pytest output was fully confirmed and pasted. Future commits will strictly wait for pasted pytest confirmation.
+- **D38. Mutation 2 (u=x) detection regime (Step 7).** Mutation 2 (u=x instead of u=x/scale) passes
+  the standard-scale smoothing check because at typical scale values (~66) the difference is small;
+  it is only caught at low scale (scale=0.001), confirming the normalisation matters most when scale
+  differs significantly from 1. The test uses a second low-scale run (scale=0.001, beta=0.5, 15 iters)
+  that reliably fails under Mutation 2: std(beta=0.5)=0.000170 >= std(beta=0)=0.000139.
 
 ## Open questions
 
@@ -263,4 +268,10 @@ thresholds will be recorded as T1, T2, ... when they are measured.
 - **T14. MLEM count conservation (Step 5).** At $n=64$, 30 angles, $10^6$ counts, the relative absolute
   difference between `sum(A x_k)` and `sum(m)` across 10 iterations is measured at $0.0$ ($<10^{-15}$).
   Threshold set to $10^{-12}$.
+- **T15. TV gradient finite-difference tolerance (Step 7).**
+  Comparing analytic `grad_tv(u, eps=1e-4)` against central finite differences of the isotropic TV functional
+  on a $16 \times 16$ random image: measured max absolute difference is $9.42 \times 10^{-09}$, measured
+  relative error is $2.77 \times 10^{-09}$.
+  Test threshold set to $10^{-5}$ (margin of $>10^2$ over measured numerical discrepancy).
+
 
